@@ -1,12 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 import PostDetailed from "./components/PostDetailed";
 import PostList from "./components/PostList";
 
 function App() {
   const [posts, setPosts] = useState([]); // Clean state with all posts for filtering
-  const [searchTerm, setSearchTerm] = useState(""); // Controlled input element
-  const [openedPost, setOpenedPost] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedPost, setSelectedPost] = useState(null);
+  const [isPostsLoading, setIsPostsLoading] = useState(true);
+  const [loadingPostId, setLoadingPostId] = useState(null);
+  const [postsError, setPostsError] = useState(null);
+
+  const abortControllerRef = useRef(null);
 
   const filteredPosts = posts.filter((post) =>
     post.title.toLowerCase().includes(searchTerm.toLowerCase())
@@ -14,14 +19,21 @@ function App() {
 
   useEffect(() => {
     const fetchPosts = async () => {
+      setIsPostsLoading(true);
       try {
         const response = await fetch(
-          "https://jsonplaceholder.typicode.com/posts"
+          'https://jsonplaceholder.typicode.com/posts'
         );
+        if (!response.ok) {
+          throw new Error();
+        }
         const data = await response.json();
         setPosts(data);
       } catch (error) {
         console.error(error);
+        setPostsError(true);
+      } finally {
+        setIsPostsLoading(false);
       }
     };
     fetchPosts();
@@ -32,31 +44,75 @@ function App() {
     setSearchTerm(inputValue);
   };
 
-  const handleOpenPost = async (post) => {
+  const fetchComments = async (postId, controller) => {
     try {
       const response = await fetch(
-        `https://jsonplaceholder.typicode.com/posts/${post.id}/comments`
+        `https://jsonplaceholder.typicode.com/posts/${postId}/comments`,
+        { signal: controller.signal }
       );
-      const data = await response.json();
-      setOpenedPost({ ...post, comments: data });
+      if (!response.ok) {
+        throw new Error('Failed to fetch comments');
+      }
+      const comments = await response.json();
+      return comments;
     } catch (error) {
-      console.error(error);
+      if (error.name !== 'AbortError') {
+        console.error(error);
+        return null;
+      }
     }
-  };
+  }
+
+  const handleOpenPost = async (post) => {
+    setLoadingPostId(post.id);
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    const comments = await fetchComments(post.id, controller);
+
+    // only clear loading state and update selectedPost state if fetch wasn't aborted.
+    if (!controller.signal.aborted) {
+      setSelectedPost({...post, comments: comments}); 
+      setLoadingPostId(null);
+    }
+  }
 
   const handleClosePost = () => {
-    setOpenedPost(null);
+    setSelectedPost(null);
   };
 
-  return !openedPost ? (
+  if (postsError) {
+    return (
+      <p style={{ color: "red" }}>
+        There was an error loading the posts. Refresh to try again.
+      </p>
+    );
+  }
+
+  if (isPostsLoading) {
+    return <p>Loading posts ...</p>;
+  }
+
+  return selectedPost ? (
+    <PostDetailed
+      selectedPost={selectedPost}
+      onClosePost={handleClosePost}
+      onRetry={handleOpenPost}
+    />
+  ) : (
     <PostList
       searchTerm={searchTerm}
       onInputChange={handleInputChange}
       filteredPosts={filteredPosts}
       onOpenPost={handleOpenPost}
+      isPostsLoading={isPostsLoading}
+      loadingPostId={loadingPostId}
     />
-  ) : (
-    <PostDetailed openedPost={openedPost} onClosePost={handleClosePost} />
   );
 }
 
